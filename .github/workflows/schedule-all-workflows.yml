@@ -1,0 +1,45 @@
+name: Schedule All Workflows
+
+on:
+  schedule:
+    # 每天北京时间 04:00（UTC 20:00）
+    - cron: "0 20 * * *"
+  workflow_dispatch:
+
+permissions:
+  actions: write
+  contents: read
+
+concurrency:
+  group: schedule-all-workflows
+  cancel-in-progress: false
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Dispatch all build workflows
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          echo "正在获取仓库中的工作流..."
+          gh api "repos/${GH_REPO}/actions/workflows" --paginate \
+            --jq '.workflows[] | select(.state == "active") | [.path, .name] | @tsv' |
+          while IFS="$(printf '\t')" read -r workflow_path workflow_name; do
+            # 跳过调度器自身，避免每天重复触发自己
+            if [ "$workflow_path" = ".github/workflows/schedule-dispatch.yml" ] || [ "$workflow_path" = ".github/workflows/schedule-all-workflows.yml" ]; then
+              echo "跳过调度器：$workflow_path"
+              continue
+            fi
+
+            echo "尝试触发：$workflow_name ($workflow_path)"
+            if gh workflow run "$workflow_path" --ref master; then
+              echo "已提交触发请求：$workflow_name"
+            else
+              echo "::warning::无法触发 $workflow_name。请确认该工作流支持 workflow_dispatch，且默认分支中存在该工作流文件。"
+            fi
+            sleep 2
+          done
